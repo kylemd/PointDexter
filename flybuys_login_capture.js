@@ -1,50 +1,79 @@
-// @name Flybuys Auth Extractor to File
-// @description Captures auth code, tokens, verifiers and saves as a file
-// @version 1.1
+// @name Flybuys Auth Extractor (Post-SMS)
+// @description Waits for redirect after SMS verify, then saves code + tokens
+// @version 1.2
 // @match *://auth.flybuys.com.au/*
 
-(function() {
-  const dump = {};
+(function () {
+  // Utility: dump matching items from storage
+  const collectStorage = () => {
+    const dump = {};
 
-  // Extract the authorization code from the URL
-  const url = new URL(window.location.href);
-  const code = url.searchParams.get("code");
-  if (code) {
-    dump.auth_code = code;
-  }
-
-  // Grab likely keys from localStorage / sessionStorage
-  try {
-    for (let k of Object.keys(localStorage)) {
-      if (/verifier|token|auth|pkce/i.test(k)) {
-        dump["localStorage:" + k] = localStorage.getItem(k);
+    try {
+      for (let k of Object.keys(localStorage)) {
+        if (/verifier|token|auth|pkce/i.test(k)) {
+          dump["localStorage:" + k] = localStorage.getItem(k);
+        }
       }
-    }
-    for (let k of Object.keys(sessionStorage)) {
-      if (/verifier|token|auth|pkce/i.test(k)) {
-        dump["sessionStorage:" + k] = sessionStorage.getItem(k);
+      for (let k of Object.keys(sessionStorage)) {
+        if (/verifier|token|auth|pkce/i.test(k)) {
+          dump["sessionStorage:" + k] = sessionStorage.getItem(k);
+        }
       }
+    } catch (e) {
+      dump.error = e.toString();
     }
-  } catch (e) {
-    dump.error = e.toString();
-  }
 
-  // Format as plain text
-  const output = Object.entries(dump)
-    .map(([k, v]) => `${k}:\n${v}\n`)
-    .join("\n");
+    return dump;
+  };
 
-  // Create and download the blob file
-  const blob = new Blob([output], { type: 'text/plain' });
-  const urlBlob = URL.createObjectURL(blob);
+  // Utility: write dump to text file
+  const writeToFile = (text) => {
+    const blob = new Blob([text], { type: 'text/plain' });
+    const urlBlob = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = urlBlob;
+    a.download = "flybuys-auth-dump.txt";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+  };
 
-  const a = document.createElement("a");
-  a.href = urlBlob;
-  a.download = "flybuys-auth-dump.txt";
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
+  let alreadyFired = false;
 
-  alert("Flybuys token data saved as a text file.");
+  const checkForAuthCode = () => {
+    if (alreadyFired) return;
+    const currentUrl = new URL(window.location.href);
+    const code = currentUrl.searchParams.get("code");
 
+    if (code) {
+      alreadyFired = true;
+
+      const dump = collectStorage();
+      dump.auth_code = code;
+
+      const text = Object.entries(dump)
+        .map(([k, v]) => `${k}:\n${v}\n`)
+        .join("\n");
+
+      writeToFile(text);
+      alert("Flybuys token data saved to file.");
+    }
+  };
+
+  // Run on page load
+  checkForAuthCode();
+
+  // Monitor URL changes (for SPA/WebView redirects)
+  const oldPushState = history.pushState;
+  const oldReplaceState = history.replaceState;
+
+  const patchHistoryMethod = (method) => function () {
+    const ret = method.apply(this, arguments);
+    setTimeout(checkForAuthCode, 500);
+    return ret;
+  };
+
+  history.pushState = patchHistoryMethod(oldPushState);
+  history.replaceState = patchHistoryMethod(oldReplaceState);
+  window.addEventListener("popstate", checkForAuthCode);
 })();
